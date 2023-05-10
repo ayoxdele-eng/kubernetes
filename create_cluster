@@ -1,0 +1,31 @@
+terraform apply --auto-approve
+
+terraform refresh
+location=$(terraform output print_public_ip | grep public_ip | awk '{print $3}' | cut -c 2- | rev | cut -c 2- | rev | head -n 1)
+workdir=$(pwd)
+joinlocation=$workdir"/joincluster/"$location"/"joincluster.sh
+echo "" > hosts
+
+echo -e "\n" >> hosts
+
+# terraform output master_public_ip | cut -c 2- | rev | cut -c 2- | rev >> hosts
+echo "[kubemaster]" >> hosts
+
+echo -e "\n" >> hosts
+
+
+terraform output print_public_ip | grep public_ip | awk '{print $3}' | cut -c 2- | rev | cut -c 2- | rev | head -n 1 >> hosts
+
+echo -e "\n" >> hosts
+
+echo "[kubeworkers]" >> hosts
+
+echo -e "\n" >> hosts
+
+terraform output print_public_ip | grep public_ip | awk '{print $3}' | cut -c 2- | rev | cut -c 2- | rev | tail -n 3 | head -n 2 >> hosts
+
+echo "[nfs-server]" >> hosts
+
+terraform output print_public_ip | grep public_ip | awk '{print $3}' | cut -c 2- | rev | cut -c 2- | rev | tail -n 1 >> hosts
+
+ansible-playbook -i hosts play.yaml

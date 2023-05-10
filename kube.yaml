@@ -1,0 +1,177 @@
+- name: Kubernetes setup
+  hosts: all
+  become: true
+  tasks:
+    - name: Update apt package index and install required packages
+      apt:
+        name: ['apt-transport-https', 'ca-certificates', 'curl', 'gnupg', 'lsb-release']
+        update_cache: yes
+      tags: [update]
+
+    - name: Disable and turn off SWAP
+      ansible.posix.sysctl:
+        name: vm.swappiness
+        value: 0
+        state: present
+        sysctl_file: /etc/sysctl.d/99-swappiness.conf
+      tags: [swap]
+
+    - name: Remove swap entry from /etc/fstab
+      become: true
+      lineinfile:
+        path: /etc/fstab
+        state: absent
+        regexp: '^/swap.*'
+      tags: [swap]
+
+    - name: Stop and Disable firewall
+      systemd:
+        name: ufw
+        state: stopped
+        enabled: no
+      tags: [firewall]
+
+    - name: Enable and Load Kernel modules
+      lineinfile:
+        path: /etc/modules-load.d/containerd.conf
+        line: "{{ item }}"
+        create: true
+      with_items:
+        - overlay
+        - br_netfilter
+      tags: [kernel]
+
+    - name: Add Kernel settings
+      copy:
+        dest: /etc/sysctl.d/kubernetes.conf
+        content: |
+          net.bridge.bridge-nf-call-ip6tables = 1
+          net.bridge.bridge-nf-call-iptables  = 1
+          net.ipv4.ip_forward                 = 1
+      notify: Reload sysctl
+      tags: [kernel]
+
+    - name: Create directory /etc/apt/keyrings
+      become: true
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Download Docker GPG key
+      shell: curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg >> /dev/null
+
+    - name: Add Docker repository to apt sources
+      shell: echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+
+    - name: Set permissions on Docker GPG key
+      become: true
+      file:
+        path: /etc/apt/keyrings/docker.gpg
+        mode: '0644'
+
+    - name: Update apt cache
+      become: true
+      apt:
+        update_cache: yes
+
+    - name: Install Docker packages
+      become: true
+      apt:
+        name: containerd.io
+        state: present
+    - name: Configure containerd
+      become: true
+      command: "containerd config default > /etc/containerd/config.toml"
+
+    - name: Update containerd config
+      ansible.builtin.replace:
+        path: /etc/containerd/config.toml
+        regexp: 'SystemdCgroup \= false'
+        replace: 'SystemdCgroup \= true'
+  
+    - name: Restart containerd service
+      ansible.builtin.systemd:
+        name: containerd
+        state: restarted
+
+    - name: Enable containerd service on boot
+      ansible.builtin.systemd:
+        name: containerd
+        enabled: yes
+
+    - name: Download Kubernetes GPG key
+      ansible.builtin.get_url:
+        url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+        dest: /etc/apt/keyrings/kubernetes-archive-keyring.gpg
+        mode: '0644'
+    
+    - name: Add Kubernetes apt repository
+      ansible.builtin.shell: |
+        echo "deb [signed-by=/etc/apt/keyrings/kubernetes-archive-keyring.gpg] https://apt.kubernetes.io/ kubernetes-xenial main" | tee /etc/apt/sources.list.d/kubernetes.list
+
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: yes
+
+    - name: Install Kubernetes components
+      ansible.builtin.apt:
+        name:
+          - kubelet
+          - kubeadm
+          - kubectl
+        state: latest
+
+    - name: Hold Kubernetes components at current version
+      ansible.builtin.apt:
+        name:
+          - kubelet
+          - kubeadm
+          - kubectl
+        state: held
+
+    - name: Enable and start kubelet service
+      ansible.builtin.service:
+        name: kubelet
+        enabled: yes
+        state: started
+
+    - name: Enable ssh password authentication and permit root login
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^PasswordAuthentication .*'
+        line: 'PasswordAuthentication yes'
+      become: true
+      backup: yes
+
+    - name: Permit root login via ssh
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        line: 'PermitRootLogin yes'
+      become: true
+      backup: yes
+
+    - name: Reload sshd configuration
+      ansible.builtin.systemd:
+        name: sshd
+        state: reloaded
+      become: true
+
+    - name: Set root password
+      become: yes
+      shell: echo -e "kubeadmin\nkubeadmin" | passwd root
+  
+    - name: Set TERM environment variable in bashrc
+      become: yes
+      lineinfile:
+        path: /etc/bash.bashrc
+        line: 'export TERM=xterm'
+
+        
+    - name: Pull required container images
+      command: kubeadm config images pull
+
+    - name: Initialize Kubernetes cluster
+      command: kubeadm init --apiserver-advertise-address=10.0.1.10 --pod-network-cidr=192.168.0.0/16
+

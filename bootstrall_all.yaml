@@ -1,0 +1,204 @@
+
+- name: Configure Kubernetes Cluster
+  hosts: server
+  become: true
+  tasks:
+    # - name: Disable and turn off SWAP
+    #   linseinfile:
+    #     path: /etc/fstab
+    #     state: absent
+    #     regexp: '^/swap'
+    #   when: ansible_facts['ansible_swaptotal_mb'] != '0'
+    #   notify: Reboot
+
+    - name: Stop and Disable firewall
+      service:
+        name: ufw
+        state: stopped
+        enabled: false
+
+    - name: Enable and Load Kernel modules
+      copy:
+        content: |
+          overlay
+          br_netfilter
+        dest: /etc/modules-load.d/containerd.conf
+      
+
+    - name: Add the overlay and br_netfilter kernel modules
+      modprobe:
+        name: overlay
+        state: present 
+
+    - name: Add the 802.1q module
+      modprobe:
+        name: br_netfilter
+        state: present     
+
+        
+
+    - name: Add Kernel settings
+      copy:
+        content: |
+          net.bridge.bridge-nf-call-ip6tables = 1
+          net.bridge.bridge-nf-call-iptables  = 1
+          net.ipv4.ip_forward                 = 1
+        dest: /etc/sysctl.d/kubernetes.conf
+
+    # Set ip forwarding on in /proc and verify token value with the sysctl command
+    - ansible.posix.sysctl:
+        name: net.ipv4.ip_forward
+        value: '1'
+        sysctl_set: true 
+
+    - ansible.posix.sysctl:
+        name: net.bridge.bridge-nf-call-iptables
+        value: '1'
+        sysctl_set: true   
+
+    - ansible.posix.sysctl:
+        name: net.bridge.bridge-nf-call-ip6tables
+        value: '1'
+        sysctl_set: true        
+      
+
+    - name: Install containerd runtime
+      apt:
+        name: "{{ packages }}"
+        state: present
+      vars:
+        packages:
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+      notify: Configure containerd
+
+    - name: Remove temporary Docker GPG key file
+      file:
+        path: /etc/apt/keyrings/docker.gpg
+        state: absent  
+
+    - name: Create apt keyrings directory
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+    
+
+    - name: Import Docker GPG key
+      shell:  curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+      
+
+    - name: Set permissions for Docker GPG key
+      file:
+        path: /etc/apt/keyrings/docker.gpg
+        mode: '0644'
+   
+    
+    - name: Create Docker apt repository file
+      lineinfile:
+        path: /etc/apt/sources.list.d/docker.list
+        line: 'deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu   jammy stable'
+        create: true
+
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes    
+      
+
+    - name: Install Docker packages
+      apt:
+        name: "{{ packages }}"
+        state: present
+      vars:
+        packages:
+          - containerd.io
+      
+
+    - name: Copy containerd default configuration
+      shell: containerd config default > /etc/containerd/config.toml
+        
+
+    - name: Update containerd configuration
+      replace:
+        path: /etc/containerd/config.toml
+        regexp: 'SystemdCgroup \= false'
+        replace: 'SystemdCgroup = true'
+
+    - name: Restart containerd
+      service:
+        name: containerd
+        state: restarted
+
+    - name: Enable containerd on boot
+      service:
+        name: containerd
+        enabled: true
+    
+    - name: Download and install Kubernetes GPG key
+      get_url:
+        url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+        dest: /etc/apt/keyrings/kubernetes-archive-keyring.gpg
+
+    - name: Add Kubernetes apt repository
+      lineinfile:
+        path: /etc/apt/sources.list.d/kubernetes.list
+        line: 'deb [signed-by=/etc/apt/keyrings/kubernetes-archive-keyring.gpg] https://apt.kubernetes.io/ kubernetes-xenial main'
+        create: true
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+      
+
+    
+
+    - name: Install Kubernetes packages
+      apt:
+        name: "{{ packages }}"
+        state: present
+      vars:
+        packages:
+          - kubelet
+          - kubeadm
+          - kubectl
+      
+
+    - name: Prevent python from being upgraded
+      ansible.builtin.dpkg_selections:
+        name: kubeadm
+        selection: hold  
+
+    - name: Prevent python from being upgraded
+      ansible.builtin.dpkg_selections:
+        name: kubelet
+        selection: hold
+
+    - name: Prevent python from being upgraded
+      ansible.builtin.dpkg_selections:
+        name: kubectl
+        selection: hold            
+
+    - name: Enable kubelet service
+      service:
+        name: kubelet
+        state: started
+        enabled: true
+
+    - name: Enable ssh password authentication
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^PasswordAuthentication'
+        line: 'PasswordAuthentication yes'
+      
+
+    - name: Permit root login
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^PermitRootLogin'
+        line: 'PermitRootLogin yes'
+      
+
+    

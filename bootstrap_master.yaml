@@ -1,0 +1,24 @@
+- name: Pull required containers
+  shell: kubeadm config images pull >/dev/null 2>&1
+
+- name: Initialize Kubernetes Cluster
+  command: kubeadm init --apiserver-advertise-address=10.0.1.10 --pod-network-cidr=192.168.0.0/16
+  register: kubeadm_init_output
+
+- name: Wait for Kubernetes components to start
+  pause:
+    seconds: 50
+
+- name: Create kube directory
+  file:
+    path: root/.kube
+    state: directory
+
+- name: Copy admin.conf to user's kube directory
+  command: sudo cp -i /etc/kubernetes/admin.conf root/.kube/config
+
+- name: Set ownership of kube config file
+  command: sudo chown $(id -u):$(id -g) root/.kube/config"
+
+- name: Generate and save cluster join command
+  shell: kubeadm token create --print-join-command > /joincluster.sh 2>/dev/null

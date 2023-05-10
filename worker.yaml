@@ -1,0 +1,21 @@
+- name: Intro to Ansible Playbooks
+
+  hosts: kubeworkers
+  tasks:
+  - name: Run a script with arguments (free form)
+    ansible.builtin.script: bootstrap_all.sh
+
+  - name: Install Python pip
+    apt: name={{ item }} update_cache=true state=present force_apt_get=yes
+    with_items:
+    - python-pip
+    - python3-pip
+    become: true
+  - name: Install bottle python package
+    ansible.builtin.pip:
+      name: kubernetes
+
+  - name: Run a script with arguments (free form)
+    ansible.builtin.script: /home/ayeon/ec2-docker/joincluster/44.198.175.139/joincluster.sh
+      
+    

@@ -1,0 +1,102 @@
+
+- name: Intro to Ansible Playbooks
+  hosts: kubemaster
+  tasks:
+  - name: Run a script with arguments (free form)
+    ansible.builtin.script: bootstrap_all.sh
+
+  - name: Install Python pip
+    apt: name={{ item }} update_cache=true state=present force_apt_get=yes
+    with_items:
+    - python-pip
+    - python3-pip
+    - nfs-common
+    become: true
+  - name: Install bottle python package
+    ansible.builtin.pip:
+      name: kubernetes
+
+  - name: Run a script with arguments (free form)
+    ansible.builtin.script: bootstrap_master.sh
+
+  - name: Store file into /tmp/fetched/host.example.com/tmp/somefile
+    ansible.builtin.fetch:
+      src: /joincluster.sh
+      dest: joincluster
+  
+  - name: Download calico manifest to the cluster.
+    ansible.builtin.get_url:
+      url: https://raw.githubusercontent.com/projectcalico/calico/v3.25.0/manifests/tigera-operator.yaml
+      dest: ~/calico.yaml
+      mode: '0664'
+
+  - name: Apply calico manifest to the cluster.
+    kubernetes.core.k8s:
+      state: present
+      src: ~/calico.yaml
+
+  - name: Download calico-custom-res manifest to the cluster.
+    ansible.builtin.get_url:
+      url: https://raw.githubusercontent.com/projectcalico/calico/v3.25.0/manifests/custom-resources.yaml
+      dest: ~/calico-custom-res.yaml
+      mode: '0664'
+
+  - name: Apply calico-custom-res manifest to the cluster.
+    kubernetes.core.k8s:
+      state: present
+      src: ~/calico-custom-res.yaml
+  # - name:  Synchronization using rsync protocol on delegate host (push)
+  #   ansible.posix.synchronize:
+  #     src: /joincluster.sh
+  #     dest: /joincluster.sh
+  #   delegate_to: kubeworker    
+    
+      
+- name: Add Components on the worker Node    
+  hosts: kubeworkers
+  tasks:
+  - name: Run a script with arguments (free form)
+    ansible.builtin.script: bootstrap_all.sh
+
+  - name: Install Python pip
+    apt: name={{ item }} update_cache=true state=present force_apt_get=yes
+    with_items:
+    - python-pip
+    - python3-pip
+    - nfs-common
+    become: true
+  - name: Install bottle python package
+    ansible.builtin.pip:
+      name: kubernetes
+
+- name: Add Components on the worker Node    
+  hosts: nfs-server
+  tasks:
+  - name: Install NFS server packages
+    apt:
+      name: "{{ item }}"
+      state: present
+    loop:
+      - nfs-kernel-server 
+  - name: Create parent directory
+    file:
+      path: /jenkins
+      state: directory
+      owner: nobody
+      group: nogroup
+      mode: "0777"      
+  - name: Configure NFS exports
+    lineinfile:
+      path: /etc/exports
+      line: "{{ item }}"
+      create: yes
+      insertafter: EOF
+    loop:
+        - "/jenkins *(rw,sync,no_subtree_check)"
+
+  - name: Restart NFS server
+    service:
+      name: nfs-kernel-server
+      state: restarted       
+
+ 
